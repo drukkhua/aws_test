@@ -19,7 +19,7 @@ jobs:
     if: github.ref == 'refs/heads/main'
 
     steps:
-    - uses
+    - uses: actions/checkout@v3
 
     - name: Настройка AWS credentials
       uses: aws-actions/configure-aws-credentials@v1
