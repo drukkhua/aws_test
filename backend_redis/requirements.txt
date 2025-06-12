@@ -1,7 +1,7 @@
 
 # backendredis/requirements.txt
 
-Django==3.2
+Django==4.2.22
 redis
 requests
 django-hosts
