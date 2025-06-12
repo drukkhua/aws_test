@@ -1,0 +1,71 @@
+name: F1 Store CI/CD
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+env:
+  AWS_REGION: ${{ secrets.AWS_REGION }}
+  ECR_REPOSITORY_BACKEND_RDS: ${{ secrets.ECR_REPOSITORY_BACKEND_RDS }}
+  ECR_REPOSITORY_BACKEND_REDIS: ${{ secrets.ECR_REPOSITORY_BACKEND_REDIS }}
+  S3_BUCKET: ${{ secrets.S3_BUCKET }}
+
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+
+    steps:
+    - uses
+
+    - name: Настройка AWS credentials
+      uses: aws-actions/configure-aws-credentials@v1
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: ${{ env.AWS_REGION }}
+
+    - name: Логин в Amazon ECR
+      id: login-ecr
+      uses: aws-actions/amazon-ecr-login@v1
+
+    - name: Сборка и публикация Backend RDS
+      env:
+        ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+      run: |
+        docker build -t $ECR_REGISTRY/$ECR_REPOSITORY_BACKEND_RDS:${{ github.sha }} -f backend-rds/Dockerfile ./backend-rds
+        docker push $ECR_REGISTRY/$ECR_REPOSITORY_BACKEND_RDS:${{ github.sha }}
+        docker tag $ECR_REGISTRY/$ECR_REPOSITORY_BACKEND_RDS:${{ github.sha }} $ECR_REGISTRY/$ECR_REPOSITORY_BACKEND_RDS:latest
+        docker push $ECR_REGISTRY/$ECR_REPOSITORY_BACKEND_RDS:latest
+
+    - name: Сборка и публикация Backend Redis
+      env:
+        ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+      run: |
+        docker build -t $ECR_REGISTRY/$ECR_REPOSITORY_BACKEND_REDIS:${{ github.sha }} -f backend-redis/Dockerfile ./backend-redis
+        docker push $ECR_REGISTRY/$ECR_REPOSITORY_BACKEND_REDIS:${{ github.sha }}
+        docker tag $ECR_REGISTRY/$ECR_REPOSITORY_BACKEND_REDIS:${{ github.sha }} $ECR_REGISTRY/$ECR_REPOSITORY_BACKEND_REDIS:latest
+        docker push $ECR_REGISTRY/$ECR_REPOSITORY_BACKEND_REDIS:latest
+
+    - name: Сборка и публикация Frontend
+      run: |
+        docker build -t f1-store-frontend:${{ github.sha }} -f frontend/Dockerfile ./frontend
+        aws s3 sync frontend/dist/ s3://${{ env.S3_BUCKET }}
+
+    - name: Очистка CloudFront кэша
+      run: |
+        aws cloudfront create-invalidation --distribution-id ${{ secrets.CLOUDFRONT_DISTRIBUTION_ID }} --paths "/*"
+
+    - name: Обновление деплоймента на EC2
+      uses: appleboy/ssh-action@master
+      with:
+        host: ${{ secrets.EC2_HOST }}
+        username: ${{ secrets.EC2_USERNAME }}
+        key: ${{ secrets.EC2_SSH_KEY }}
+        script: |
+          aws ecr get-login-password --region ${{ env.AWS_REGION }} | docker login --username AWS --password-stdin ${{ steps.login-ecr.outputs.registry }}
+          docker-compose pull
+          docker-compose up -d --force-recreate
